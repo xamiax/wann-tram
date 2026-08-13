@@ -575,7 +575,7 @@
             selectDirection.disabled = true;
             selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
 
-            fetch(`https://v6.vbb.transport.rest/stops/${encodeURIComponent(stationId)}/departures?duration=60&results=50`)
+            fetch(`https://v6.vbb.transport.rest/stops/${encodeURIComponent(stationId)}/departures?duration=90&results=100`)
                 .then(response => {
                     if (!response.ok) throw new Error('Fehler beim Laden der Linien');
                     return response.json();
@@ -731,10 +731,8 @@
 
             fetchAllLive();
 
-            // 1. API-Refresh-Timer (Alle 30 Sekunden Livedaten nachladen)
             liveRefreshInterval = setInterval(fetchAllLive, 30000);
 
-            // 2. Countdown-Timer (Jede Minute verbleibende Minuten im DOM herunterzählen)
             countdownTimerInterval = setInterval(() => {
                 updateAllCountdowns();
             }, 60000);
@@ -771,7 +769,7 @@
         function fetchLiveDepartures(card, stationId, targetLine, targetDirection) {
             const departuresList = card.querySelector('.departures-list');
 
-            fetch(`https://v6.vbb.transport.rest/stops/${encodeURIComponent(stationId)}/departures?duration=60&results=50`)
+            fetch(`https://v6.vbb.transport.rest/stops/${encodeURIComponent(stationId)}/departures?duration=120&results=100`)
                 .then(response => {
                     if (!response.ok) throw new Error('API-Server ist nicht erreichbar');
                     return response.json();
@@ -782,7 +780,9 @@
                     const filtered = rawDepartures.filter(dep => {
                         const matchLine = !targetLine || (dep.line && dep.line.name === targetLine);
                         const matchDir = !targetDirection || (dep.direction === targetDirection);
-                        return matchLine && matchDir;
+                        const timeIso = dep.when || dep.plannedWhen;
+                        const minutes = calculateMinutesRemaining(timeIso);
+                        return matchLine && matchDir && minutes >= 0;
                     });
 
                     const next5 = filtered.slice(0, 5);
@@ -795,9 +795,10 @@
                     departuresList.innerHTML = next5.map(dep => {
                         const timeIso = dep.when || dep.plannedWhen;
                         const minutes = calculateMinutesRemaining(timeIso);
+                        const labelText = minutes === 0 ? 'jetzt' : `${minutes} min`;
                         return `
                             <li class="departure-slot" data-timestamp="${escapeHtml(timeIso)}">
-                                <span class="departure-time">${minutes} min</span>
+                                <span class="departure-time">${labelText}</span>
                             </li>
                         `;
                     }).join('');
@@ -815,18 +816,23 @@
                 const minutesSpan = slot.querySelector('.departure-time');
                 if (timeIso && minutesSpan) {
                     const minutes = calculateMinutesRemaining(timeIso);
-                    minutesSpan.textContent = `${minutes} min`;
+                    if (minutes < 0) {
+                        slot.remove();
+                    } else if (minutes === 0) {
+                        minutesSpan.textContent = 'jetzt';
+                    } else {
+                        minutesSpan.textContent = `${minutes} min`;
+                    }
                 }
             });
         }
 
         function calculateMinutesRemaining(departureIsoString) {
-            if (!departureIsoString) return 0;
+            if (!departureIsoString) return -1;
             const now = new Date();
             const departureTime = new Date(departureIsoString);
             const diffMs = departureTime - now;
-            const diffMinutes = Math.floor(diffMs / (1000 * 60));
-            return diffMinutes < 0 ? 0 : diffMinutes;
+            return Math.floor(diffMs / (1000 * 60));
         }
 
         function escapeHtml(str) {
