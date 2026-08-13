@@ -4,9 +4,834 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wann-Tram</title>
+    <style>
+        /* Utility Classes */
+        .hidden {
+            display: none !important;
+        }
+
+        /* Layout & Containers */
+        body {
+            font-family: sans-serif;
+            margin: 15px;
+            padding: 0;
+        }
+
+        .view-container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        /* Formular Styling */
+        .search-block {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            background-color: #f9f9f9;
+            position: relative;
+        }
+
+        .form-group {
+            margin-bottom: 12px;
+            position: relative;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 4px;
+            font-weight: bold;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+
+        .autocomplete-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            border: 1px solid #ccc;
+            max-height: 180px;
+            overflow-y: auto;
+            background: #fff;
+            position: absolute;
+            width: 100%;
+            z-index: 10;
+            box-sizing: border-box;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .autocomplete-list li {
+            padding: 8px 10px;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+        }
+
+        .autocomplete-list li:last-child {
+            border-bottom: none;
+        }
+
+        .autocomplete-list li:hover {
+            background-color: #f0f0f0;
+        }
+
+        .swap-divider {
+            text-align: center;
+            margin: 10px 0;
+        }
+
+        .btn-swap {
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+
+        .btn-remove-last {
+            background-color: #ff4d4d;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .form-actions {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .btn-add,
+        .btn-submit {
+            padding: 10px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        /* Monitor-Karten Styling */
+        .departure-card {
+            border: 1px solid #ccc;
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 15px;
+            background-color: #fff;
+        }
+
+        .card-header {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .station-name {
+            margin: 0;
+            font-size: 1.2em;
+        }
+
+        .line-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .transport-icon {
+            width: 24px;
+            height: 24px;
+            object-fit: contain;
+        }
+
+        .line-badge {
+            font-weight: bold;
+            padding: 2px 6px;
+            border: 1px solid #333;
+            border-radius: 4px;
+        }
+
+        .direction-name {
+            color: #555;
+        }
+
+        .card-divider {
+            border: 0;
+            border-top: 1px solid #ddd;
+            margin: 12px 0;
+        }
+
+        .card-body {
+            overflow-x: auto;
+        }
+
+        .departures-list {
+            display: flex;
+            justify-content: space-between;
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            gap: 10px;
+        }
+
+        .departure-slot {
+            flex: 1;
+            text-align: center;
+            background: #f0f0f0;
+            padding: 8px 4px;
+            border-radius: 6px;
+            font-weight: bold;
+            min-width: 50px;
+        }
+
+        /* Error View */
+        .error-box {
+            border: 1px solid #ff0000;
+            background-color: #ffe6e6;
+            padding: 15px;
+            border-radius: 8px;
+            color: #990000;
+            margin-bottom: 15px;
+        }
+    </style>
 </head>
 <body>
-    <h1>Wann-Tram Monitor</h1>
-    <p>Setup erfolgreich!</p>
+
+    <main class="view-container">
+
+        <!-- FORMULAR-ANSICHT -->
+        <section id="view-form" class="hidden">
+            <h2>Abfahrtsmonitor konfigurieren</h2>
+            <form id="config-form">
+                <div id="search-blocks-container"></div>
+
+                <div class="form-actions">
+                    <button type="button" id="btn-add-block" class="btn-add">+ Weitere Suche hinzufügen</button>
+                    <button type="button" id="btn-remove-last" class="btn-remove-last hidden">Letzte Suche entfernen</button>
+                    <button type="submit" class="btn-submit">Monitor starten</button>
+                </div>
+            </form>
+        </section>
+
+        <!-- MONITOR-ANSICHT -->
+        <section id="view-monitor" class="hidden">
+            <h2>Abfahrten</h2>
+            <div id="monitors-container"></div>
+            <footer>
+                <p><a href="#" id="link-edit-config">Bearbeiten</a></p>
+            </footer>
+        </section>
+
+        <!-- FEHLER-ANSICHT -->
+        <section id="view-error" class="hidden">
+            <div class="error-box">
+                <p id="error-message"></p>
+            </div>
+            <button type="button" id="btn-error-back">Zurück zum Formular</button>
+        </section>
+
+    </main>
+
+    <script>
+        const blockDeparturesCache = {};
+        const debounceTimers = {};
+        
+        let liveRefreshInterval = null;
+        let countdownTimerInterval = null;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            
+            if (urlParams.has('s1')) {
+                loadMonitorView(urlParams);
+            } else {
+                showFormView();
+            }
+
+            document.getElementById('btn-add-block').addEventListener('click', () => {
+                addSearchBlock();
+            });
+
+            document.getElementById('btn-remove-last').addEventListener('click', () => {
+                removeLastSearchBlock();
+            });
+
+            document.getElementById('config-form').addEventListener('submit', handleFormSubmit);
+
+            document.getElementById('link-edit-config').addEventListener('click', (e) => {
+                e.preventDefault();
+                clearMonitorTimers();
+                populateFormFromUrl();
+                showFormView();
+            });
+
+            document.getElementById('btn-error-back').addEventListener('click', () => {
+                clearMonitorTimers();
+                showFormView();
+            });
+
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('.form-group')) {
+                    document.querySelectorAll('.autocomplete-list').forEach(ul => ul.classList.add('hidden'));
+                }
+            });
+        });
+
+        function clearMonitorTimers() {
+            if (liveRefreshInterval) clearInterval(liveRefreshInterval);
+            if (countdownTimerInterval) clearInterval(countdownTimerInterval);
+            liveRefreshInterval = null;
+            countdownTimerInterval = null;
+        }
+
+        function showFormView() {
+            document.getElementById('view-form').classList.remove('hidden');
+            document.getElementById('view-monitor').classList.add('hidden');
+            document.getElementById('view-error').classList.add('hidden');
+
+            const container = document.getElementById('search-blocks-container');
+            if (container.children.length === 0) {
+                addSearchBlock();
+            }
+        }
+
+        function showMonitorView() {
+            document.getElementById('view-form').classList.add('hidden');
+            document.getElementById('view-monitor').classList.remove('hidden');
+            document.getElementById('view-error').classList.add('hidden');
+        }
+
+        function showErrorView(message) {
+            clearMonitorTimers();
+            document.getElementById('view-form').classList.add('hidden');
+            document.getElementById('view-monitor').classList.add('hidden');
+            document.getElementById('view-error').classList.remove('hidden');
+            document.getElementById('error-message').textContent = message;
+        }
+
+        function populateFormFromUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const container = document.getElementById('search-blocks-container');
+            container.innerHTML = '';
+
+            let i = 1;
+            while (params.has(`s${i}`)) {
+                const stationId = params.get(`s${i}`);
+                const stationName = params.get(`sn${i}`) || stationId;
+                const line = params.get(`l${i}`) || '';
+                const direction = params.get(`d${i}`) || '';
+
+                const block = addSearchBlock();
+                
+                const inputStation = block.querySelector('.input-station');
+                const hiddenStationId = block.querySelector('.input-station-id');
+                
+                inputStation.value = stationName;
+                hiddenStationId.value = stationId;
+
+                fetchLinesForStation(block, stationId, line, direction);
+
+                i++;
+            }
+        }
+
+        function addSearchBlock() {
+            const container = document.getElementById('search-blocks-container');
+            const blocks = container.querySelectorAll('.search-block');
+            
+            if (blocks.length > 0) {
+                const divider = document.createElement('div');
+                divider.className = 'swap-divider';
+                
+                const swapBtn = document.createElement('button');
+                swapBtn.type = 'button';
+                swapBtn.className = 'btn-swap';
+                swapBtn.textContent = '⇅ Reihenfolge tauschen';
+                swapBtn.addEventListener('click', function() {
+                    swapBlocks(this);
+                });
+
+                divider.appendChild(swapBtn);
+                container.appendChild(divider);
+            }
+
+            const block = document.createElement('fieldset');
+            block.className = 'search-block';
+            
+            const groupStation = document.createElement('div');
+            groupStation.className = 'form-group';
+            
+            const labelStation = document.createElement('label');
+            labelStation.textContent = 'Haltestelle:';
+            
+            const inputStation = document.createElement('input');
+            inputStation.type = 'text';
+            inputStation.className = 'input-station';
+            inputStation.placeholder = 'Station eingeben...';
+            inputStation.required = true;
+            inputStation.autocomplete = 'off';
+            inputStation.addEventListener('input', function() {
+                handleStationInput(this);
+            });
+
+            const hiddenStationId = document.createElement('input');
+            hiddenStationId.type = 'hidden';
+            hiddenStationId.className = 'input-station-id';
+
+            const autocompleteList = document.createElement('ul');
+            autocompleteList.className = 'autocomplete-list hidden';
+
+            groupStation.appendChild(labelStation);
+            groupStation.appendChild(inputStation);
+            groupStation.appendChild(hiddenStationId);
+            groupStation.appendChild(autocompleteList);
+
+            const groupLine = document.createElement('div');
+            groupLine.className = 'form-group';
+            
+            const labelLine = document.createElement('label');
+            labelLine.textContent = 'Linie:';
+
+            const selectLine = document.createElement('select');
+            selectLine.className = 'select-line';
+            selectLine.disabled = true;
+            selectLine.innerHTML = '<option value="">-- Erst Station wählen --</option>';
+            selectLine.addEventListener('change', function() {
+                handleLineChange(this);
+            });
+
+            groupLine.appendChild(labelLine);
+            groupLine.appendChild(selectLine);
+
+            const groupDirection = document.createElement('div');
+            groupDirection.className = 'form-group';
+
+            const labelDirection = document.createElement('label');
+            labelDirection.textContent = 'Fahrtrichtung:';
+
+            const selectDirection = document.createElement('select');
+            selectDirection.className = 'select-direction';
+            selectDirection.disabled = true;
+            selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
+
+            groupDirection.appendChild(labelDirection);
+            groupDirection.appendChild(selectDirection);
+
+            const legend = document.createElement('legend');
+            legend.className = 'search-block-title';
+
+            block.appendChild(legend);
+            block.appendChild(groupStation);
+            block.appendChild(groupLine);
+            block.appendChild(groupDirection);
+
+            container.appendChild(block);
+            
+            reindexFormElements();
+            return block;
+        }
+
+        function removeLastSearchBlock() {
+            const container = document.getElementById('search-blocks-container');
+            const blocks = container.querySelectorAll('.search-block');
+            
+            if (blocks.length > 1) {
+                const lastBlock = blocks[blocks.length - 1];
+                const prevElement = lastBlock.previousElementSibling;
+
+                if (prevElement && prevElement.classList.contains('swap-divider')) {
+                    prevElement.remove();
+                }
+                
+                lastBlock.remove();
+                reindexFormElements();
+            }
+        }
+
+        function swapBlocks(button) {
+            const divider = button.closest('.swap-divider');
+            const prevBlock = divider.previousElementSibling;
+            const nextBlock = divider.nextElementSibling;
+
+            if (prevBlock && nextBlock) {
+                const container = document.getElementById('search-blocks-container');
+                container.insertBefore(nextBlock, prevBlock);
+                container.insertBefore(divider, prevBlock);
+                reindexFormElements();
+            }
+        }
+
+        function reindexFormElements() {
+            const container = document.getElementById('search-blocks-container');
+            const blocks = container.querySelectorAll('.search-block');
+            const removeLastBtn = document.getElementById('btn-remove-last');
+
+            blocks.forEach((block, index) => {
+                const num = index + 1;
+                block.dataset.blockId = `block-${num}`;
+                
+                const title = block.querySelector('.search-block-title');
+                if (title) title.textContent = `Suche #${num}`;
+
+                const labelStation = block.querySelector('.form-group:nth-child(2) label');
+                const inputStation = block.querySelector('.input-station');
+                if (labelStation && inputStation) {
+                    inputStation.id = `station-input-${num}`;
+                    labelStation.setAttribute('for', `station-input-${num}`);
+                }
+
+                const labelLine = block.querySelector('.form-group:nth-child(3) label');
+                const selectLine = block.querySelector('.select-line');
+                if (labelLine && selectLine) {
+                    selectLine.id = `line-select-${num}`;
+                    labelLine.setAttribute('for', `line-select-${num}`);
+                }
+
+                const labelDirection = block.querySelector('.form-group:nth-child(4) label');
+                const selectDirection = block.querySelector('.select-direction');
+                if (labelDirection && selectDirection) {
+                    selectDirection.id = `direction-select-${num}`;
+                    labelDirection.setAttribute('for', `direction-select-${num}`);
+                }
+            });
+
+            if (blocks.length > 1) {
+                removeLastBtn.classList.remove('hidden');
+            } else {
+                removeLastBtn.classList.add('hidden');
+            }
+        }
+
+        function handleStationInput(input) {
+            const block = input.closest('.search-block');
+            const hiddenId = block.querySelector('.input-station-id');
+            const list = block.querySelector('.autocomplete-list');
+            const selectLine = block.querySelector('.select-line');
+            const selectDirection = block.querySelector('.select-direction');
+            const query = input.value.trim();
+
+            hiddenId.value = '';
+
+            selectLine.disabled = true;
+            selectLine.innerHTML = '<option value="">-- Erst Station wählen --</option>';
+            selectDirection.disabled = true;
+            selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
+
+            const blockId = input.id;
+            if (debounceTimers[blockId]) {
+                clearTimeout(debounceTimers[blockId]);
+            }
+
+            if (query.length < 2) {
+                list.innerHTML = '';
+                list.classList.add('hidden');
+                return;
+            }
+
+            debounceTimers[blockId] = setTimeout(() => {
+                fetch(`https://v6.vbb.transport.rest/locations?query=${encodeURIComponent(query)}&results=5&stops=true&addresses=false&poi=false`)
+                    .then(response => {
+                        if (!response.ok) throw new Error('Netzwerkfehler beim Suchen der Haltestelle');
+                        return response.json();
+                    })
+                    .then(results => {
+                        list.innerHTML = '';
+                        const stops = results.filter(item => item.type === 'stop' || item.type === 'station');
+
+                        if (stops.length === 0) {
+                            list.classList.add('hidden');
+                            return;
+                        }
+
+                        stops.forEach(stop => {
+                            const li = document.createElement('li');
+                            li.textContent = stop.name;
+                            li.addEventListener('click', () => {
+                                input.value = stop.name;
+                                hiddenId.value = stop.id;
+                                list.classList.add('hidden');
+                                fetchLinesForStation(block, stop.id);
+                            });
+                            list.appendChild(li);
+                        });
+
+                        list.classList.remove('hidden');
+                    })
+                    .catch(err => {
+                        console.error('Autocomplete Fehler:', err);
+                        list.classList.add('hidden');
+                    });
+            }, 300);
+        }
+
+        function fetchLinesForStation(block, stationId, preselectedLine = '', preselectedDirection = '') {
+            const selectLine = block.querySelector('.select-line');
+            const selectDirection = block.querySelector('.select-direction');
+            const blockKey = block.dataset.blockId || 'default';
+
+            selectLine.disabled = true;
+            selectLine.innerHTML = '<option value="">Lade Linien...</option>';
+            selectDirection.disabled = true;
+            selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
+
+            fetch(`https://v6.vbb.transport.rest/stops/${encodeURIComponent(stationId)}/departures?duration=60&results=50`)
+                .then(response => {
+                    if (!response.ok) throw new Error('Fehler beim Laden der Linien');
+                    return response.json();
+                })
+                .then(data => {
+                    const departures = data.departures || data;
+                    blockDeparturesCache[blockKey] = departures;
+
+                    const linesMap = new Map();
+
+                    departures.forEach(dep => {
+                        if (dep.line && dep.line.name) {
+                            linesMap.set(dep.line.name, dep.line);
+                        }
+                    });
+
+                    selectLine.innerHTML = '<option value="">-- Linie wählen (oder alle) --</option>';
+
+                    if (linesMap.size === 0) {
+                        selectLine.innerHTML = '<option value="">Keine aktuellen Linien gefunden</option>';
+                        return;
+                    }
+
+                    Array.from(linesMap.keys()).sort().forEach(lineName => {
+                        const opt = document.createElement('option');
+                        opt.value = lineName;
+                        opt.textContent = lineName;
+                        if (lineName === preselectedLine) {
+                            opt.selected = true;
+                        }
+                        selectLine.appendChild(opt);
+                    });
+
+                    selectLine.disabled = false;
+
+                    if (preselectedLine) {
+                        handleLineChange(selectLine, preselectedDirection);
+                    }
+                })
+                .catch(err => {
+                    console.error('Linien-Lade-Fehler:', err);
+                    selectLine.innerHTML = '<option value="">Fehler beim Laden der Linien</option>';
+                });
+        }
+
+        function handleLineChange(select, preselectedDirection = '') {
+            const block = select.closest('.search-block');
+            const selectDirection = block.querySelector('.select-direction');
+            const selectedLine = select.value;
+            const blockKey = block.dataset.blockId || 'default';
+
+            selectDirection.disabled = true;
+
+            if (!selectedLine) {
+                selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
+                return;
+            }
+
+            const departures = blockDeparturesCache[blockKey] || [];
+            const directionsSet = new Set();
+
+            departures.forEach(dep => {
+                if (dep.line && dep.line.name === selectedLine && dep.direction) {
+                    directionsSet.add(dep.direction);
+                }
+            });
+
+            selectDirection.innerHTML = '<option value="">-- Fahrtrichtung wählen (oder alle) --</option>';
+
+            if (directionsSet.size === 0) {
+                selectDirection.innerHTML = '<option value="">Keine Richtungen gefunden</option>';
+                return;
+            }
+
+            Array.from(directionsSet).sort().forEach(directionName => {
+                const opt = document.createElement('option');
+                opt.value = directionName;
+                opt.textContent = directionName;
+                if (directionName === preselectedDirection) {
+                    opt.selected = true;
+                }
+                selectDirection.appendChild(opt);
+            });
+
+            selectDirection.disabled = false;
+        }
+
+        function handleFormSubmit(e) {
+            e.preventDefault();
+            const blocks = document.querySelectorAll('.search-block');
+            const params = new URLSearchParams();
+
+            let isValid = true;
+
+            blocks.forEach((block, index) => {
+                const stationId = block.querySelector('.input-station-id').value;
+                const stationName = block.querySelector('.input-station').value;
+                const line = block.querySelector('.select-line').value;
+                const direction = block.querySelector('.select-direction').value;
+
+                if (!stationId) {
+                    isValid = false;
+                }
+
+                const i = index + 1;
+                params.set(`s${i}`, stationId);
+                params.set(`sn${i}`, stationName);
+                if (line) params.set(`l${i}`, line);
+                if (direction) params.set(`d${i}`, direction);
+            });
+
+            if (!isValid) {
+                alert('Bitte wähle für alle Such-Blöcke eine Haltestelle aus den Vorschlägen der Liste aus.');
+                return;
+            }
+
+            window.location.search = params.toString();
+        }
+
+        function loadMonitorView(params) {
+            clearMonitorTimers();
+            showMonitorView();
+            
+            const container = document.getElementById('monitors-container');
+            container.innerHTML = '';
+
+            const activeMonitors = [];
+            let i = 1;
+
+            while (params.has(`s${i}`)) {
+                const stationId = params.get(`s${i}`);
+                const stationName = params.get(`sn${i}`) || stationId;
+                const line = params.get(`l${i}`) || '';
+                const direction = params.get(`d${i}`) || '';
+
+                if (!stationId) {
+                    showErrorView('Ungültiges URL-Format. Es fehlen Haltestellen-IDs.');
+                    return;
+                }
+
+                const card = createMonitorCard(stationName, line, direction);
+                container.appendChild(card);
+
+                activeMonitors.push({ card, stationId, line, direction });
+                i++;
+            }
+
+            const fetchAllLive = () => {
+                activeMonitors.forEach(mon => {
+                    fetchLiveDepartures(mon.card, mon.stationId, mon.line, mon.direction);
+                });
+            };
+
+            fetchAllLive();
+
+            // 1. API-Refresh-Timer (Alle 30 Sekunden Livedaten nachladen)
+            liveRefreshInterval = setInterval(fetchAllLive, 30000);
+
+            // 2. Countdown-Timer (Jede Minute verbleibende Minuten im DOM herunterzählen)
+            countdownTimerInterval = setInterval(() => {
+                updateAllCountdowns();
+            }, 60000);
+        }
+
+        function createMonitorCard(stationName, line, direction) {
+            const card = document.createElement('article');
+            card.className = 'departure-card';
+
+            card.innerHTML = `
+                <header class="card-header">
+                    <div class="station-info">
+                        <h3 class="station-name">${escapeHtml(stationName)}</h3>
+                    </div>
+                    <div class="line-info">
+                        <img src="icons/transport.svg" alt="[Verkehrsmittel]" class="transport-icon" onerror="this.style.display='none'">
+                        <span class="line-badge">${escapeHtml(line || 'Alle')}</span>
+                        <span class="direction-name">nach ${escapeHtml(direction || 'Alle Richtungen')}</span>
+                    </div>
+                </header>
+
+                <hr class="card-divider">
+
+                <div class="card-body">
+                    <ul class="departures-list">
+                        <li class="departure-slot"><span class="departure-time">Lade...</span></li>
+                    </ul>
+                </div>
+            `;
+
+            return card;
+        }
+
+        function fetchLiveDepartures(card, stationId, targetLine, targetDirection) {
+            const departuresList = card.querySelector('.departures-list');
+
+            fetch(`https://v6.vbb.transport.rest/stops/${encodeURIComponent(stationId)}/departures?duration=60&results=50`)
+                .then(response => {
+                    if (!response.ok) throw new Error('API-Server ist nicht erreichbar');
+                    return response.json();
+                })
+                .then(data => {
+                    const rawDepartures = data.departures || data;
+
+                    const filtered = rawDepartures.filter(dep => {
+                        const matchLine = !targetLine || (dep.line && dep.line.name === targetLine);
+                        const matchDir = !targetDirection || (dep.direction === targetDirection);
+                        return matchLine && matchDir;
+                    });
+
+                    const next5 = filtered.slice(0, 5);
+
+                    if (next5.length === 0) {
+                        departuresList.innerHTML = '<li class="departure-slot"><span class="departure-time">Keine Abfahrten</span></li>';
+                        return;
+                    }
+
+                    departuresList.innerHTML = next5.map(dep => {
+                        const timeIso = dep.when || dep.plannedWhen;
+                        const minutes = calculateMinutesRemaining(timeIso);
+                        return `
+                            <li class="departure-slot" data-timestamp="${escapeHtml(timeIso)}">
+                                <span class="departure-time">${minutes} min</span>
+                            </li>
+                        `;
+                    }).join('');
+                })
+                .catch(err => {
+                    console.error('Fehler beim Abrufen der Live-Daten:', err);
+                    departuresList.innerHTML = '<li class="departure-slot"><span class="departure-time">Fehler</span></li>';
+                });
+        }
+
+        function updateAllCountdowns() {
+            const slots = document.querySelectorAll('.departure-slot[data-timestamp]');
+            slots.forEach(slot => {
+                const timeIso = slot.dataset.timestamp;
+                const minutesSpan = slot.querySelector('.departure-time');
+                if (timeIso && minutesSpan) {
+                    const minutes = calculateMinutesRemaining(timeIso);
+                    minutesSpan.textContent = `${minutes} min`;
+                }
+            });
+        }
+
+        function calculateMinutesRemaining(departureIsoString) {
+            if (!departureIsoString) return 0;
+            const now = new Date();
+            const departureTime = new Date(departureIsoString);
+            const diffMs = departureTime - now;
+            const diffMinutes = Math.floor(diffMs / (1000 * 60));
+            return diffMinutes < 0 ? 0 : diffMinutes;
+        }
+
+        function escapeHtml(str) {
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+    </script>
 </body>
 </html>
