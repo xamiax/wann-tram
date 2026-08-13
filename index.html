@@ -22,6 +22,15 @@
             margin: 0 auto;
         }
 
+        /* Slogan Styling */
+        .sub-heading-note {
+            font-size: 0.9em;
+            color: #555;
+            font-style: italic;
+            margin-top: -10px;
+            margin-bottom: 20px;
+        }
+
         /* Formular Styling */
         .search-block {
             border: 1px solid #ccc;
@@ -217,6 +226,7 @@
         <!-- MONITOR-ANSICHT -->
         <section id="view-monitor" class="hidden">
             <h2>Abfahrten</h2>
+            <p class="sub-heading-note">Türen schließen, Rechte zurückbleiben bitte!</p>
             <div id="monitors-container"></div>
             <footer>
                 <p><a href="#" id="link-edit-config">Bearbeiten</a></p>
@@ -274,6 +284,16 @@
             document.addEventListener('click', (e) => {
                 if (!e.target.closest('.form-group')) {
                     document.querySelectorAll('.autocomplete-list').forEach(ul => ul.classList.add('hidden'));
+                }
+            });
+
+            // Sofort frische API-Daten laden, wenn der Tab nach Standby wieder sichtbar wird
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') {
+                    const params = new URLSearchParams(window.location.search);
+                    if (params.has('s1')) {
+                        loadMonitorView(params);
+                    }
                 }
             });
         });
@@ -769,7 +789,7 @@
         function fetchLiveDepartures(card, stationId, targetLine, targetDirection) {
             const departuresList = card.querySelector('.departures-list');
 
-            fetch(`https://v6.vbb.transport.rest/stops/${encodeURIComponent(stationId)}/departures?duration=120&results=100`)
+            fetch(`https://v6.vbb.transport.rest/stops/${encodeURIComponent(stationId)}/departures?duration=90&results=100`)
                 .then(response => {
                     if (!response.ok) throw new Error('API-Server ist nicht erreichbar');
                     return response.json();
