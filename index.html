@@ -26,6 +26,26 @@
             margin: 0 auto;
         }
 
+        /* Intro Box */
+        .intro-box {
+            background-color: #f4f6f8;
+            border-left: 4px solid #333;
+            padding: 12px 14px;
+            margin-bottom: 20px;
+            border-radius: 0 6px 6px 0;
+            font-size: 0.95em;
+            line-height: 1.4;
+            color: #333;
+        }
+
+        .intro-box p {
+            margin: 0 0 6px 0;
+        }
+
+        .intro-box p:last-child {
+            margin-bottom: 0;
+        }
+
         /* Header Note */
         .sub-heading-note {
             font-size: 0.9em;
@@ -229,6 +249,12 @@
         <!-- FORMULAR-ANSICHT -->
         <section id="view-form" class="hidden">
             <h2>Abfahrtsmonitor konfigurieren</h2>
+            
+            <div class="intro-box">
+                <p><strong>Checkst du vor dem Losgehen auch ständig mehrere Haltestellen umständlich in der App?</strong></p>
+                <p>Hier hast du alle Abfahrten für <strong>deine</strong> Stationen auf einen Blick. Einmal einrichten, Link als Lesezeichen speichern oder Tab offen lassen – fertig.</p>
+            </div>
+
             <form id="config-form">
                 <div id="search-blocks-container"></div>
 
