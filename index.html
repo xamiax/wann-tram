@@ -56,11 +56,24 @@
             font-weight: bold;
         }
 
-        .form-group input,
+        .form-group input[type="text"],
         .form-group select {
             width: 100%;
             padding: 8px;
             box-sizing: border-box;
+        }
+
+        .form-group-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 6px;
+            font-size: 0.9em;
+            cursor: pointer;
+        }
+
+        .form-group-checkbox input {
+            cursor: pointer;
         }
 
         .autocomplete-list {
@@ -277,6 +290,10 @@
                 <select class="select-direction" disabled>
                     <option value="">-- Erst Linie wählen --</option>
                 </select>
+                <label class="form-group-checkbox">
+                    <input type="checkbox" class="checkbox-match-next-stop" checked>
+                    <span>Alle Fahrten in diese Fahrtrichtung einschließen (gleicher nächster Halt)</span>
+                </label>
             </div>
         </fieldset>
     </template>
@@ -385,7 +402,7 @@
             }
 
             async function fetchVbbDepartures(stationId, duration = 90, results = 100) {
-                const url = `${API_BASE_URL}/stops/${encodeURIComponent(stationId)}/departures?duration=${duration}&results=${results}`;
+                const url = `${API_BASE_URL}/stops/${encodeURIComponent(stationId)}/departures?duration=${duration}&results=${results}&stopovers=true`;
                 const response = await fetch(url);
                 if (!response.ok) throw new Error('API-Server ist nicht erreichbar');
                 const data = await response.json();
@@ -397,6 +414,19 @@
                 const response = await fetch(url);
                 if (!response.ok) throw new Error('Netzwerkfehler bei Standortsuche');
                 return await response.json();
+            }
+
+            function getNextStopId(dep, currentStationId) {
+                if (!dep.stopovers || !Array.isArray(dep.stopovers)) return null;
+                const idx = dep.stopovers.findIndex(s => s.stop && (s.stop.id === currentStationId || s.stop.station?.id === currentStationId));
+                if (idx !== -1 && idx + 1 < dep.stopovers.length) {
+                    const next = dep.stopovers[idx + 1];
+                    return next.stop?.id || next.stop?.station?.id || null;
+                }
+                if (dep.stopovers.length > 0) {
+                    return dep.stopovers[0].stop?.id || dep.stopovers[0].stop?.station?.id || null;
+                }
+                return null;
             }
 
             function addSearchBlock() {
@@ -563,14 +593,16 @@
                 debounceTimers.set(input.id, timer);
             }
 
-            async function fetchLinesForStation(block, stationId, preselectedLine = '', preselectedDirection = '') {
+            async function fetchLinesForStation(block, stationId, preselectedLine = '', preselectedDirection = '', matchNextStop = true) {
                 const selectLine = block.querySelector('.select-line');
                 const selectDirection = block.querySelector('.select-direction');
+                const checkboxMatch = block.querySelector('.checkbox-match-next-stop');
 
                 selectLine.disabled = true;
                 selectLine.innerHTML = '<option value="">Lade Linien...</option>';
                 selectDirection.disabled = true;
                 selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
+                if (checkboxMatch) checkboxMatch.checked = matchNextStop;
 
                 try {
                     const departures = await fetchVbbDepartures(stationId, 90, 100);
@@ -664,6 +696,7 @@
                     const stationName = block.querySelector('.input-station').value;
                     const line = block.querySelector('.select-line').value;
                     const direction = block.querySelector('.select-direction').value;
+                    const matchNext = block.querySelector('.checkbox-match-next-stop').checked;
 
                     if (!stationId) {
                         isValid = false;
@@ -674,6 +707,7 @@
                     params.set(`sn${i}`, stationName);
                     if (line) params.set(`l${i}`, line);
                     if (direction) params.set(`d${i}`, direction);
+                    params.set(`m${i}`, matchNext ? '1' : '0');
                 });
 
                 if (!isValid) {
@@ -694,6 +728,7 @@
                     const stationName = params.get(`sn${i}`) || stationId;
                     const line = params.get(`l${i}`) || '';
                     const direction = params.get(`d${i}`) || '';
+                    const matchNext = params.has(`m${i}`) ? params.get(`m${i}`) === '1' : true;
 
                     const block = addSearchBlock();
                     
@@ -703,7 +738,7 @@
                     inputStation.value = stationName;
                     hiddenStationId.value = stationId;
 
-                    fetchLinesForStation(block, stationId, line, direction);
+                    fetchLinesForStation(block, stationId, line, direction, matchNext);
 
                     i++;
                 }
@@ -722,6 +757,7 @@
                     const stationName = params.get(`sn${i}`) || stationId;
                     const line = params.get(`l${i}`) || '';
                     const direction = params.get(`d${i}`) || '';
+                    const matchNextStop = params.has(`m${i}`) ? params.get(`m${i}`) !== '0' : true;
 
                     if (!stationId) {
                         showErrorView('Ungültiges URL-Format. Es fehlen Haltestellen-IDs.');
@@ -731,7 +767,7 @@
                     const card = createMonitorCard(stationName, line, direction);
                     DOM.monitorsContainer.appendChild(card);
 
-                    activeMonitors.push({ card, stationId, line, direction });
+                    activeMonitors.push({ card, stationId, line, direction, matchNextStop });
                     i++;
                 }
 
@@ -743,7 +779,7 @@
 
             function refreshAllLiveMonitors() {
                 activeMonitors.forEach(mon => {
-                    fetchLiveDepartures(mon.card, mon.stationId, mon.line, mon.direction);
+                    fetchLiveDepartures(mon.card, mon.stationId, mon.line, mon.direction, mon.matchNextStop);
                 });
             }
 
@@ -775,15 +811,36 @@
                 return card;
             }
 
-            async function fetchLiveDepartures(card, stationId, targetLine, targetDirection) {
+            async function fetchLiveDepartures(card, stationId, targetLine, targetDirection, matchNextStop = true) {
                 const departuresList = card.querySelector('.departures-list');
 
                 try {
                     const rawDepartures = await fetchVbbDepartures(stationId, 90, 100);
 
+                    let referenceNextStopId = null;
+                    if (matchNextStop && targetDirection) {
+                        const targetDep = rawDepartures.find(dep => {
+                            const matchLine = !targetLine || (dep.line && dep.line.name === targetLine);
+                            return matchLine && dep.direction === targetDirection;
+                        });
+                        if (targetDep) {
+                            referenceNextStopId = getNextStopId(targetDep, stationId);
+                        }
+                    }
+
                     const filtered = rawDepartures.filter(dep => {
                         const matchLine = !targetLine || (dep.line && dep.line.name === targetLine);
-                        const matchDir = !targetDirection || (dep.direction === targetDirection);
+                        let matchDir = false;
+
+                        if (!targetDirection) {
+                            matchDir = true;
+                        } else if (matchNextStop && referenceNextStopId) {
+                            const depNextStopId = getNextStopId(dep, stationId);
+                            matchDir = depNextStopId === referenceNextStopId;
+                        } else {
+                            matchDir = dep.direction === targetDirection;
+                        }
+
                         const timeIso = dep.when || dep.plannedWhen;
                         const minutes = calculateMinutesRemaining(timeIso);
                         return matchLine && matchDir && minutes >= 0;
