@@ -442,16 +442,51 @@
                 return await response.json();
             }
 
-            function getNextStopId(dep, currentStationId) {
-                if (!dep.stopovers || !Array.isArray(dep.stopovers)) return null;
-                const idx = dep.stopovers.findIndex(s => s.stop && (s.stop.id === currentStationId || s.stop.station?.id === currentStationId));
-                if (idx !== -1 && idx + 1 < dep.stopovers.length) {
-                    const next = dep.stopovers[idx + 1];
-                    return next.stop?.id || next.stop?.station?.id || null;
+            function normalizeId(id) {
+                if (!id) return '';
+                return String(id).replace(/^0+/, '').trim();
+            }
+
+            function normalizeName(name) {
+                if (!name) return '';
+                return String(name).toLowerCase().replace(/\s+/g, ' ').replace(/[(),.-]/g, '').trim();
+            }
+
+            function getNextStopIdentifier(dep, currentStationId, currentStationName) {
+                if (!dep || !dep.stopovers || !Array.isArray(dep.stopovers) || dep.stopovers.length === 0) {
+                    return null;
                 }
-                if (dep.stopovers.length > 0) {
-                    return dep.stopovers[0].stop?.id || dep.stopovers[0].stop?.station?.id || null;
+
+                const normCurrentId = normalizeId(currentStationId);
+                const normCurrentName = normalizeName(currentStationName || dep.stop?.name);
+
+                let currentIdx = dep.stopovers.findIndex(s => {
+                    if (!s || !s.stop) return false;
+                    const stopId = normalizeId(s.stop.id);
+                    const stationId = normalizeId(s.stop.station?.id);
+                    const stopName = normalizeName(s.stop.name);
+                    return (
+                        (normCurrentId && (stopId === normCurrentId || stationId === normCurrentId)) ||
+                        (normCurrentName && stopName === normCurrentName)
+                    );
+                });
+
+                if (currentIdx !== -1 && currentIdx + 1 < dep.stopovers.length) {
+                    const next = dep.stopovers[currentIdx + 1].stop;
+                    return normalizeName(next.name) || normalizeId(next.id);
                 }
+
+                if (currentIdx === -1 && dep.stopovers.length > 0) {
+                    const first = dep.stopovers[0].stop;
+                    const firstNormName = normalizeName(first?.name);
+                    if (firstNormName !== normCurrentName) {
+                        return firstNormName || normalizeId(first?.id);
+                    } else if (dep.stopovers.length > 1) {
+                        const second = dep.stopovers[1].stop;
+                        return normalizeName(second?.name) || normalizeId(second?.id);
+                    }
+                }
+
                 return null;
             }
 
@@ -793,7 +828,7 @@
                     const card = createMonitorCard(stationName, line, direction);
                     DOM.monitorsContainer.appendChild(card);
 
-                    activeMonitors.push({ card, stationId, line, direction, matchNextStop });
+                    activeMonitors.push({ card, stationId, stationName, line, direction, matchNextStop });
                     i++;
                 }
 
@@ -805,7 +840,7 @@
 
             function refreshAllLiveMonitors() {
                 activeMonitors.forEach(mon => {
-                    fetchLiveDepartures(mon.card, mon.stationId, mon.line, mon.direction, mon.matchNextStop);
+                    fetchLiveDepartures(mon.card, mon.stationId, mon.stationName, mon.line, mon.direction, mon.matchNextStop);
                 });
             }
 
@@ -837,20 +872,20 @@
                 return card;
             }
 
-            async function fetchLiveDepartures(card, stationId, targetLine, targetDirection, matchNextStop = true) {
+            async function fetchLiveDepartures(card, stationId, stationName, targetLine, targetDirection, matchNextStop = true) {
                 const departuresList = card.querySelector('.departures-list');
 
                 try {
                     const rawDepartures = await fetchVbbDepartures(stationId, 90, 100);
 
-                    let referenceNextStopId = null;
+                    let referenceNextStopIdentifier = null;
                     if (matchNextStop && targetDirection) {
                         const targetDep = rawDepartures.find(dep => {
                             const matchLine = !targetLine || (dep.line && dep.line.name === targetLine);
                             return matchLine && dep.direction === targetDirection;
                         });
                         if (targetDep) {
-                            referenceNextStopId = getNextStopId(targetDep, stationId);
+                            referenceNextStopIdentifier = getNextStopIdentifier(targetDep, stationId, stationName);
                         }
                     }
 
@@ -860,9 +895,13 @@
 
                         if (!targetDirection) {
                             matchDir = true;
-                        } else if (matchNextStop && referenceNextStopId) {
-                            const depNextStopId = getNextStopId(dep, stationId);
-                            matchDir = depNextStopId === referenceNextStopId;
+                        } else if (matchNextStop && referenceNextStopIdentifier) {
+                            const depNextStopIdentifier = getNextStopIdentifier(dep, stationId, stationName);
+                            if (depNextStopIdentifier) {
+                                matchDir = depNextStopIdentifier === referenceNextStopIdentifier;
+                            } else {
+                                matchDir = dep.direction === targetDirection;
+                            }
                         } else {
                             matchDir = dep.direction === targetDirection;
                         }
