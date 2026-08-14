@@ -22,7 +22,7 @@
             margin: 0 auto;
         }
 
-        /* Slogan Styling */
+        /* Header Note */
         .sub-heading-note {
             font-size: 0.9em;
             color: #555;
@@ -243,369 +243,336 @@
 
     </main>
 
+    <!-- HTML TEMPLATES -->
+    <template id="tmpl-swap-divider">
+        <div class="swap-divider">
+            <button type="button" class="btn-swap">⇅ Reihenfolge tauschen</button>
+        </div>
+    </template>
+
+    <template id="tmpl-search-block">
+        <fieldset class="search-block">
+            <legend class="search-block-title">Suche #1</legend>
+            
+            <div class="form-group">
+                <label>Haltestelle:</label>
+                <input type="text" class="input-station" placeholder="Station eingeben..." required autocomplete="off" aria-autocomplete="list" aria-expanded="false">
+                <input type="hidden" class="input-station-id">
+                <ul class="autocomplete-list hidden" role="listbox"></ul>
+            </div>
+
+            <div class="form-group">
+                <label>Linie:</label>
+                <select class="select-line" disabled>
+                    <option value="">-- Erst Station wählen --</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Fahrtrichtung:</label>
+                <select class="select-direction" disabled>
+                    <option value="">-- Erst Linie wählen --</option>
+                </select>
+            </div>
+        </fieldset>
+    </template>
+
     <script>
-        const blockDeparturesCache = {};
-        const debounceTimers = {};
-        
-        let liveRefreshInterval = null;
-        let countdownTimerInterval = null;
+        (function WannTramApp() {
+            const API_BASE_URL = 'https://v6.vbb.transport.rest';
+            const DEBOUNCE_DELAY_MS = 300;
+            const LIVE_REFRESH_MS = 30000;
+            const COUNTDOWN_REFRESH_MS = 60000;
 
-        document.addEventListener('DOMContentLoaded', () => {
-            const urlParams = new URLSearchParams(window.location.search);
-            
-            if (urlParams.has('s1')) {
-                loadMonitorView(urlParams);
-            } else {
-                showFormView();
-            }
+            const debounceTimers = new Map();
+            let liveRefreshInterval = null;
+            let countdownTimerInterval = null;
+            let activeMonitors = [];
 
-            document.getElementById('btn-add-block').addEventListener('click', () => {
-                addSearchBlock();
-            });
+            const DOM = {
+                viewForm: document.getElementById('view-form'),
+                viewMonitor: document.getElementById('view-monitor'),
+                viewError: document.getElementById('view-error'),
+                errorMessage: document.getElementById('error-message'),
+                configForm: document.getElementById('config-form'),
+                blocksContainer: document.getElementById('search-blocks-container'),
+                monitorsContainer: document.getElementById('monitors-container'),
+                btnAddBlock: document.getElementById('btn-add-block'),
+                btnRemoveLast: document.getElementById('btn-remove-last'),
+                btnErrorBack: document.getElementById('btn-error-back'),
+                linkEditConfig: document.getElementById('link-edit-config'),
+                tmplSearchBlock: document.getElementById('tmpl-search-block'),
+                tmplSwapDivider: document.getElementById('tmpl-swap-divider')
+            };
 
-            document.getElementById('btn-remove-last').addEventListener('click', () => {
-                removeLastSearchBlock();
-            });
+            document.addEventListener('DOMContentLoaded', () => {
+                initEventListeners();
 
-            document.getElementById('config-form').addEventListener('submit', handleFormSubmit);
-
-            document.getElementById('link-edit-config').addEventListener('click', (e) => {
-                e.preventDefault();
-                clearMonitorTimers();
-                populateFormFromUrl();
-                showFormView();
-            });
-
-            document.getElementById('btn-error-back').addEventListener('click', () => {
-                clearMonitorTimers();
-                showFormView();
-            });
-
-            document.addEventListener('click', (e) => {
-                if (!e.target.closest('.form-group')) {
-                    document.querySelectorAll('.autocomplete-list').forEach(ul => ul.classList.add('hidden'));
+                const urlParams = new URLSearchParams(window.location.search);
+                if (urlParams.has('s1')) {
+                    loadMonitorView(urlParams);
+                } else {
+                    showFormView();
                 }
             });
 
-            // Sofort frische API-Daten laden, wenn der Tab nach Standby wieder sichtbar wird
-            document.addEventListener('visibilitychange', () => {
-                if (document.visibilityState === 'visible') {
-                    const params = new URLSearchParams(window.location.search);
-                    if (params.has('s1')) {
-                        loadMonitorView(params);
-                    }
-                }
-            });
-        });
+            function initEventListeners() {
+                DOM.btnAddBlock.addEventListener('click', () => addSearchBlock());
+                DOM.btnRemoveLast.addEventListener('click', () => removeLastSearchBlock());
+                DOM.configForm.addEventListener('submit', handleFormSubmit);
 
-        function clearMonitorTimers() {
-            if (liveRefreshInterval) clearInterval(liveRefreshInterval);
-            if (countdownTimerInterval) clearInterval(countdownTimerInterval);
-            liveRefreshInterval = null;
-            countdownTimerInterval = null;
-        }
-
-        function showFormView() {
-            document.getElementById('view-form').classList.remove('hidden');
-            document.getElementById('view-monitor').classList.add('hidden');
-            document.getElementById('view-error').classList.add('hidden');
-
-            const container = document.getElementById('search-blocks-container');
-            if (container.children.length === 0) {
-                addSearchBlock();
-            }
-        }
-
-        function showMonitorView() {
-            document.getElementById('view-form').classList.add('hidden');
-            document.getElementById('view-monitor').classList.remove('hidden');
-            document.getElementById('view-error').classList.add('hidden');
-        }
-
-        function showErrorView(message) {
-            clearMonitorTimers();
-            document.getElementById('view-form').classList.add('hidden');
-            document.getElementById('view-monitor').classList.add('hidden');
-            document.getElementById('view-error').classList.remove('hidden');
-            document.getElementById('error-message').textContent = message;
-        }
-
-        function populateFormFromUrl() {
-            const params = new URLSearchParams(window.location.search);
-            const container = document.getElementById('search-blocks-container');
-            container.innerHTML = '';
-
-            let i = 1;
-            while (params.has(`s${i}`)) {
-                const stationId = params.get(`s${i}`);
-                const stationName = params.get(`sn${i}`) || stationId;
-                const line = params.get(`l${i}`) || '';
-                const direction = params.get(`d${i}`) || '';
-
-                const block = addSearchBlock();
-                
-                const inputStation = block.querySelector('.input-station');
-                const hiddenStationId = block.querySelector('.input-station-id');
-                
-                inputStation.value = stationName;
-                hiddenStationId.value = stationId;
-
-                fetchLinesForStation(block, stationId, line, direction);
-
-                i++;
-            }
-        }
-
-        function addSearchBlock() {
-            const container = document.getElementById('search-blocks-container');
-            const blocks = container.querySelectorAll('.search-block');
-            
-            if (blocks.length > 0) {
-                const divider = document.createElement('div');
-                divider.className = 'swap-divider';
-                
-                const swapBtn = document.createElement('button');
-                swapBtn.type = 'button';
-                swapBtn.className = 'btn-swap';
-                swapBtn.textContent = '⇅ Reihenfolge tauschen';
-                swapBtn.addEventListener('click', function() {
-                    swapBlocks(this);
+                DOM.linkEditConfig.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    clearMonitorTimers();
+                    populateFormFromUrl();
+                    showFormView();
                 });
 
-                divider.appendChild(swapBtn);
-                container.appendChild(divider);
+                DOM.btnErrorBack.addEventListener('click', () => {
+                    clearMonitorTimers();
+                    showFormView();
+                });
+
+                document.addEventListener('click', (e) => {
+                    if (!e.target.closest('.form-group')) {
+                        document.querySelectorAll('.autocomplete-list').forEach(ul => ul.classList.add('hidden'));
+                    }
+                });
+
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState === 'visible') {
+                        const urlParams = new URLSearchParams(window.location.search);
+                        if (urlParams.has('s1')) {
+                            loadMonitorView(urlParams);
+                        }
+                    }
+                });
             }
 
-            const block = document.createElement('fieldset');
-            block.className = 'search-block';
-            
-            const groupStation = document.createElement('div');
-            groupStation.className = 'form-group';
-            
-            const labelStation = document.createElement('label');
-            labelStation.textContent = 'Haltestelle:';
-            
-            const inputStation = document.createElement('input');
-            inputStation.type = 'text';
-            inputStation.className = 'input-station';
-            inputStation.placeholder = 'Station eingeben...';
-            inputStation.required = true;
-            inputStation.autocomplete = 'off';
-            inputStation.addEventListener('input', function() {
-                handleStationInput(this);
-            });
+            function showFormView() {
+                DOM.viewForm.classList.remove('hidden');
+                DOM.viewMonitor.classList.add('hidden');
+                DOM.viewError.classList.add('hidden');
 
-            const hiddenStationId = document.createElement('input');
-            hiddenStationId.type = 'hidden';
-            hiddenStationId.className = 'input-station-id';
-
-            const autocompleteList = document.createElement('ul');
-            autocompleteList.className = 'autocomplete-list hidden';
-
-            groupStation.appendChild(labelStation);
-            groupStation.appendChild(inputStation);
-            groupStation.appendChild(hiddenStationId);
-            groupStation.appendChild(autocompleteList);
-
-            const groupLine = document.createElement('div');
-            groupLine.className = 'form-group';
-            
-            const labelLine = document.createElement('label');
-            labelLine.textContent = 'Linie:';
-
-            const selectLine = document.createElement('select');
-            selectLine.className = 'select-line';
-            selectLine.disabled = true;
-            selectLine.innerHTML = '<option value="">-- Erst Station wählen --</option>';
-            selectLine.addEventListener('change', function() {
-                handleLineChange(this);
-            });
-
-            groupLine.appendChild(labelLine);
-            groupLine.appendChild(selectLine);
-
-            const groupDirection = document.createElement('div');
-            groupDirection.className = 'form-group';
-
-            const labelDirection = document.createElement('label');
-            labelDirection.textContent = 'Fahrtrichtung:';
-
-            const selectDirection = document.createElement('select');
-            selectDirection.className = 'select-direction';
-            selectDirection.disabled = true;
-            selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
-
-            groupDirection.appendChild(labelDirection);
-            groupDirection.appendChild(selectDirection);
-
-            const legend = document.createElement('legend');
-            legend.className = 'search-block-title';
-
-            block.appendChild(legend);
-            block.appendChild(groupStation);
-            block.appendChild(groupLine);
-            block.appendChild(groupDirection);
-
-            container.appendChild(block);
-            
-            reindexFormElements();
-            return block;
-        }
-
-        function removeLastSearchBlock() {
-            const container = document.getElementById('search-blocks-container');
-            const blocks = container.querySelectorAll('.search-block');
-            
-            if (blocks.length > 1) {
-                const lastBlock = blocks[blocks.length - 1];
-                const prevElement = lastBlock.previousElementSibling;
-
-                if (prevElement && prevElement.classList.contains('swap-divider')) {
-                    prevElement.remove();
+                if (DOM.blocksContainer.children.length === 0) {
+                    addSearchBlock();
                 }
-                
-                lastBlock.remove();
-                reindexFormElements();
             }
-        }
 
-        function swapBlocks(button) {
-            const divider = button.closest('.swap-divider');
-            const prevBlock = divider.previousElementSibling;
-            const nextBlock = divider.nextElementSibling;
-
-            if (prevBlock && nextBlock) {
-                const container = document.getElementById('search-blocks-container');
-                container.insertBefore(nextBlock, prevBlock);
-                container.insertBefore(divider, prevBlock);
-                reindexFormElements();
+            function showMonitorView() {
+                DOM.viewForm.classList.add('hidden');
+                DOM.viewMonitor.classList.remove('hidden');
+                DOM.viewError.classList.add('hidden');
             }
-        }
 
-        function reindexFormElements() {
-            const container = document.getElementById('search-blocks-container');
-            const blocks = container.querySelectorAll('.search-block');
-            const removeLastBtn = document.getElementById('btn-remove-last');
+            function showErrorView(message) {
+                clearMonitorTimers();
+                DOM.viewForm.classList.add('hidden');
+                DOM.viewMonitor.classList.add('hidden');
+                DOM.viewError.classList.remove('hidden');
+                DOM.errorMessage.textContent = message;
+            }
 
-            blocks.forEach((block, index) => {
-                const num = index + 1;
-                block.dataset.blockId = `block-${num}`;
-                
-                const title = block.querySelector('.search-block-title');
-                if (title) title.textContent = `Suche #${num}`;
+            function clearMonitorTimers() {
+                if (liveRefreshInterval) clearInterval(liveRefreshInterval);
+                if (countdownTimerInterval) clearInterval(countdownTimerInterval);
+                liveRefreshInterval = null;
+                countdownTimerInterval = null;
+            }
 
-                const labelStation = block.querySelector('.form-group:nth-child(2) label');
+            async function fetchVbbDepartures(stationId, duration = 90, results = 100) {
+                const url = `${API_BASE_URL}/stops/${encodeURIComponent(stationId)}/departures?duration=${duration}&results=${results}`;
+                const response = await fetch(url);
+                if (!response.ok) throw new Error('API-Server ist nicht erreichbar');
+                const data = await response.json();
+                return data.departures || data;
+            }
+
+            async function fetchVbbLocations(query) {
+                const url = `${API_BASE_URL}/locations?query=${encodeURIComponent(query)}&results=5&stops=true&addresses=false&poi=false`;
+                const response = await fetch(url);
+                if (!response.ok) throw new Error('Netzwerkfehler bei Standortsuche');
+                return await response.json();
+            }
+
+            function addSearchBlock() {
+                const blocks = DOM.blocksContainer.querySelectorAll('.search-block');
+
+                if (blocks.length > 0) {
+                    const dividerClone = DOM.tmplSwapDivider.content.cloneNode(true);
+                    const swapBtn = dividerClone.querySelector('.btn-swap');
+                    swapBtn.addEventListener('click', function() {
+                        swapBlocks(this);
+                    });
+                    DOM.blocksContainer.appendChild(dividerClone);
+                }
+
+                const blockClone = DOM.tmplSearchBlock.content.cloneNode(true);
+                const block = blockClone.querySelector('.search-block');
+
                 const inputStation = block.querySelector('.input-station');
-                if (labelStation && inputStation) {
-                    inputStation.id = `station-input-${num}`;
-                    labelStation.setAttribute('for', `station-input-${num}`);
-                }
-
-                const labelLine = block.querySelector('.form-group:nth-child(3) label');
                 const selectLine = block.querySelector('.select-line');
-                if (labelLine && selectLine) {
-                    selectLine.id = `line-select-${num}`;
-                    labelLine.setAttribute('for', `line-select-${num}`);
-                }
 
-                const labelDirection = block.querySelector('.form-group:nth-child(4) label');
+                inputStation.addEventListener('input', function() {
+                    handleStationInput(this);
+                });
+
+                selectLine.addEventListener('change', function() {
+                    handleLineChange(this);
+                });
+
+                block._departuresCache = [];
+
+                DOM.blocksContainer.appendChild(blockClone);
+                reindexFormElements();
+
+                return block;
+            }
+
+            function removeLastSearchBlock() {
+                const blocks = DOM.blocksContainer.querySelectorAll('.search-block');
+                if (blocks.length > 1) {
+                    const lastBlock = blocks[blocks.length - 1];
+                    const prevElement = lastBlock.previousElementSibling;
+
+                    if (prevElement && prevElement.classList.contains('swap-divider')) {
+                        prevElement.remove();
+                    }
+
+                    lastBlock.remove();
+                    reindexFormElements();
+                }
+            }
+
+            function swapBlocks(button) {
+                const divider = button.closest('.swap-divider');
+                const prevBlock = divider.previousElementSibling;
+                const nextBlock = divider.nextElementSibling;
+
+                if (prevBlock && nextBlock) {
+                    DOM.blocksContainer.insertBefore(nextBlock, prevBlock);
+                    DOM.blocksContainer.insertBefore(divider, prevBlock);
+                    reindexFormElements();
+                }
+            }
+
+            function reindexFormElements() {
+                const blocks = DOM.blocksContainer.querySelectorAll('.search-block');
+
+                blocks.forEach((block, index) => {
+                    const num = index + 1;
+
+                    const title = block.querySelector('.search-block-title');
+                    if (title) title.textContent = `Suche #${num}`;
+
+                    const labelStation = block.querySelector('.form-group:nth-child(2) label');
+                    const inputStation = block.querySelector('.input-station');
+                    if (labelStation && inputStation) {
+                        inputStation.id = `station-input-${num}`;
+                        labelStation.setAttribute('for', `station-input-${num}`);
+                    }
+
+                    const labelLine = block.querySelector('.form-group:nth-child(3) label');
+                    const selectLine = block.querySelector('.select-line');
+                    if (labelLine && selectLine) {
+                        selectLine.id = `line-select-${num}`;
+                        labelLine.setAttribute('for', `line-select-${num}`);
+                    }
+
+                    const labelDirection = block.querySelector('.form-group:nth-child(4) label');
+                    const selectDirection = block.querySelector('.select-direction');
+                    if (labelDirection && selectDirection) {
+                        selectDirection.id = `direction-select-${num}`;
+                        labelDirection.setAttribute('for', `direction-select-${num}`);
+                    }
+                });
+
+                if (blocks.length > 1) {
+                    DOM.btnRemoveLast.classList.remove('hidden');
+                } else {
+                    DOM.btnRemoveLast.classList.add('hidden');
+                }
+            }
+
+            function handleStationInput(input) {
+                const block = input.closest('.search-block');
+                const hiddenId = block.querySelector('.input-station-id');
+                const list = block.querySelector('.autocomplete-list');
+                const selectLine = block.querySelector('.select-line');
                 const selectDirection = block.querySelector('.select-direction');
-                if (labelDirection && selectDirection) {
-                    selectDirection.id = `direction-select-${num}`;
-                    labelDirection.setAttribute('for', `direction-select-${num}`);
+                const query = input.value.trim();
+
+                hiddenId.value = '';
+                block._departuresCache = [];
+
+                selectLine.disabled = true;
+                selectLine.innerHTML = '<option value="">-- Erst Station wählen --</option>';
+                selectDirection.disabled = true;
+                selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
+
+                if (debounceTimers.has(input.id)) {
+                    clearTimeout(debounceTimers.get(input.id));
                 }
-            });
 
-            if (blocks.length > 1) {
-                removeLastBtn.classList.remove('hidden');
-            } else {
-                removeLastBtn.classList.add('hidden');
-            }
-        }
+                if (query.length < 2) {
+                    list.innerHTML = '';
+                    list.classList.add('hidden');
+                    input.setAttribute('aria-expanded', 'false');
+                    return;
+                }
 
-        function handleStationInput(input) {
-            const block = input.closest('.search-block');
-            const hiddenId = block.querySelector('.input-station-id');
-            const list = block.querySelector('.autocomplete-list');
-            const selectLine = block.querySelector('.select-line');
-            const selectDirection = block.querySelector('.select-direction');
-            const query = input.value.trim();
-
-            hiddenId.value = '';
-
-            selectLine.disabled = true;
-            selectLine.innerHTML = '<option value="">-- Erst Station wählen --</option>';
-            selectDirection.disabled = true;
-            selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
-
-            const blockId = input.id;
-            if (debounceTimers[blockId]) {
-                clearTimeout(debounceTimers[blockId]);
-            }
-
-            if (query.length < 2) {
-                list.innerHTML = '';
-                list.classList.add('hidden');
-                return;
-            }
-
-            debounceTimers[blockId] = setTimeout(() => {
-                fetch(`https://v6.vbb.transport.rest/locations?query=${encodeURIComponent(query)}&results=5&stops=true&addresses=false&poi=false`)
-                    .then(response => {
-                        if (!response.ok) throw new Error('Netzwerkfehler beim Suchen der Haltestelle');
-                        return response.json();
-                    })
-                    .then(results => {
+                const timer = setTimeout(async () => {
+                    try {
+                        const results = await fetchVbbLocations(query);
                         list.innerHTML = '';
                         const stops = results.filter(item => item.type === 'stop' || item.type === 'station');
 
                         if (stops.length === 0) {
                             list.classList.add('hidden');
+                            input.setAttribute('aria-expanded', 'false');
                             return;
                         }
 
                         stops.forEach(stop => {
                             const li = document.createElement('li');
                             li.textContent = stop.name;
+                            li.setAttribute('role', 'option');
                             li.addEventListener('click', () => {
                                 input.value = stop.name;
                                 hiddenId.value = stop.id;
                                 list.classList.add('hidden');
+                                input.setAttribute('aria-expanded', 'false');
                                 fetchLinesForStation(block, stop.id);
                             });
                             list.appendChild(li);
                         });
 
                         list.classList.remove('hidden');
-                    })
-                    .catch(err => {
+                        input.setAttribute('aria-expanded', 'true');
+                    } catch (err) {
                         console.error('Autocomplete Fehler:', err);
                         list.classList.add('hidden');
-                    });
-            }, 300);
-        }
+                        input.setAttribute('aria-expanded', 'false');
+                    }
+                }, DEBOUNCE_DELAY_MS);
 
-        function fetchLinesForStation(block, stationId, preselectedLine = '', preselectedDirection = '') {
-            const selectLine = block.querySelector('.select-line');
-            const selectDirection = block.querySelector('.select-direction');
-            const blockKey = block.dataset.blockId || 'default';
+                debounceTimers.set(input.id, timer);
+            }
 
-            selectLine.disabled = true;
-            selectLine.innerHTML = '<option value="">Lade Linien...</option>';
-            selectDirection.disabled = true;
-            selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
+            async function fetchLinesForStation(block, stationId, preselectedLine = '', preselectedDirection = '') {
+                const selectLine = block.querySelector('.select-line');
+                const selectDirection = block.querySelector('.select-direction');
 
-            fetch(`https://v6.vbb.transport.rest/stops/${encodeURIComponent(stationId)}/departures?duration=90&results=100`)
-                .then(response => {
-                    if (!response.ok) throw new Error('Fehler beim Laden der Linien');
-                    return response.json();
-                })
-                .then(data => {
-                    const departures = data.departures || data;
-                    blockDeparturesCache[blockKey] = departures;
+                selectLine.disabled = true;
+                selectLine.innerHTML = '<option value="">Lade Linien...</option>';
+                selectDirection.disabled = true;
+                selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
+
+                try {
+                    const departures = await fetchVbbDepartures(stationId, 90, 100);
+                    block._departuresCache = departures;
 
                     const linesMap = new Map();
-
                     departures.forEach(dep => {
                         if (dep.line && dep.line.name) {
                             linesMap.set(dep.line.name, dep.line);
@@ -634,168 +601,181 @@
                     if (preselectedLine) {
                         handleLineChange(selectLine, preselectedDirection);
                     }
-                })
-                .catch(err => {
+                } catch (err) {
                     console.error('Linien-Lade-Fehler:', err);
                     selectLine.innerHTML = '<option value="">Fehler beim Laden der Linien</option>';
-                });
-        }
-
-        function handleLineChange(select, preselectedDirection = '') {
-            const block = select.closest('.search-block');
-            const selectDirection = block.querySelector('.select-direction');
-            const selectedLine = select.value;
-            const blockKey = block.dataset.blockId || 'default';
-
-            selectDirection.disabled = true;
-
-            if (!selectedLine) {
-                selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
-                return;
+                }
             }
 
-            const departures = blockDeparturesCache[blockKey] || [];
-            const directionsSet = new Set();
+            function handleLineChange(select, preselectedDirection = '') {
+                const block = select.closest('.search-block');
+                const selectDirection = block.querySelector('.select-direction');
+                const selectedLine = select.value;
 
-            departures.forEach(dep => {
-                if (dep.line && dep.line.name === selectedLine && dep.direction) {
-                    directionsSet.add(dep.direction);
-                }
-            });
+                selectDirection.disabled = true;
 
-            selectDirection.innerHTML = '<option value="">-- Fahrtrichtung wählen (oder alle) --</option>';
-
-            if (directionsSet.size === 0) {
-                selectDirection.innerHTML = '<option value="">Keine Richtungen gefunden</option>';
-                return;
-            }
-
-            Array.from(directionsSet).sort().forEach(directionName => {
-                const opt = document.createElement('option');
-                opt.value = directionName;
-                opt.textContent = directionName;
-                if (directionName === preselectedDirection) {
-                    opt.selected = true;
-                }
-                selectDirection.appendChild(opt);
-            });
-
-            selectDirection.disabled = false;
-        }
-
-        function handleFormSubmit(e) {
-            e.preventDefault();
-            const blocks = document.querySelectorAll('.search-block');
-            const params = new URLSearchParams();
-
-            let isValid = true;
-
-            blocks.forEach((block, index) => {
-                const stationId = block.querySelector('.input-station-id').value;
-                const stationName = block.querySelector('.input-station').value;
-                const line = block.querySelector('.select-line').value;
-                const direction = block.querySelector('.select-direction').value;
-
-                if (!stationId) {
-                    isValid = false;
-                }
-
-                const i = index + 1;
-                params.set(`s${i}`, stationId);
-                params.set(`sn${i}`, stationName);
-                if (line) params.set(`l${i}`, line);
-                if (direction) params.set(`d${i}`, direction);
-            });
-
-            if (!isValid) {
-                alert('Bitte wähle für alle Such-Blöcke eine Haltestelle aus den Vorschlägen der Liste aus.');
-                return;
-            }
-
-            window.location.search = params.toString();
-        }
-
-        function loadMonitorView(params) {
-            clearMonitorTimers();
-            showMonitorView();
-            
-            const container = document.getElementById('monitors-container');
-            container.innerHTML = '';
-
-            const activeMonitors = [];
-            let i = 1;
-
-            while (params.has(`s${i}`)) {
-                const stationId = params.get(`s${i}`);
-                const stationName = params.get(`sn${i}`) || stationId;
-                const line = params.get(`l${i}`) || '';
-                const direction = params.get(`d${i}`) || '';
-
-                if (!stationId) {
-                    showErrorView('Ungültiges URL-Format. Es fehlen Haltestellen-IDs.');
+                if (!selectedLine) {
+                    selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
                     return;
                 }
 
-                const card = createMonitorCard(stationName, line, direction);
-                container.appendChild(card);
+                const departures = block._departuresCache || [];
+                const directionsSet = new Set();
 
-                activeMonitors.push({ card, stationId, line, direction });
-                i++;
+                departures.forEach(dep => {
+                    if (dep.line && dep.line.name === selectedLine && dep.direction) {
+                        directionsSet.add(dep.direction);
+                    }
+                });
+
+                selectDirection.innerHTML = '<option value="">-- Fahrtrichtung wählen (oder alle) --</option>';
+
+                if (directionsSet.size === 0) {
+                    selectDirection.innerHTML = '<option value="">Keine Richtungen gefunden</option>';
+                    return;
+                }
+
+                Array.from(directionsSet).sort().forEach(directionName => {
+                    const opt = document.createElement('option');
+                    opt.value = directionName;
+                    opt.textContent = directionName;
+                    if (directionName === preselectedDirection) {
+                        opt.selected = true;
+                    }
+                    selectDirection.appendChild(opt);
+                });
+
+                selectDirection.disabled = false;
             }
 
-            const fetchAllLive = () => {
+            function handleFormSubmit(e) {
+                e.preventDefault();
+                const blocks = DOM.blocksContainer.querySelectorAll('.search-block');
+                const params = new URLSearchParams();
+
+                let isValid = true;
+
+                blocks.forEach((block, index) => {
+                    const stationId = block.querySelector('.input-station-id').value;
+                    const stationName = block.querySelector('.input-station').value;
+                    const line = block.querySelector('.select-line').value;
+                    const direction = block.querySelector('.select-direction').value;
+
+                    if (!stationId) {
+                        isValid = false;
+                    }
+
+                    const i = index + 1;
+                    params.set(`s${i}`, stationId);
+                    params.set(`sn${i}`, stationName);
+                    if (line) params.set(`l${i}`, line);
+                    if (direction) params.set(`d${i}`, direction);
+                });
+
+                if (!isValid) {
+                    alert('Bitte wähle für alle Such-Blöcke eine Haltestelle aus den Vorschlägen der Liste aus.');
+                    return;
+                }
+
+                window.location.search = params.toString();
+            }
+
+            function populateFormFromUrl() {
+                const params = new URLSearchParams(window.location.search);
+                DOM.blocksContainer.innerHTML = '';
+
+                let i = 1;
+                while (params.has(`s${i}`)) {
+                    const stationId = params.get(`s${i}`);
+                    const stationName = params.get(`sn${i}`) || stationId;
+                    const line = params.get(`l${i}`) || '';
+                    const direction = params.get(`d${i}`) || '';
+
+                    const block = addSearchBlock();
+                    
+                    const inputStation = block.querySelector('.input-station');
+                    const hiddenStationId = block.querySelector('.input-station-id');
+                    
+                    inputStation.value = stationName;
+                    hiddenStationId.value = stationId;
+
+                    fetchLinesForStation(block, stationId, line, direction);
+
+                    i++;
+                }
+            }
+
+            function loadMonitorView(params) {
+                clearMonitorTimers();
+                showMonitorView();
+
+                DOM.monitorsContainer.innerHTML = '';
+                activeMonitors = [];
+
+                let i = 1;
+                while (params.has(`s${i}`)) {
+                    const stationId = params.get(`s${i}`);
+                    const stationName = params.get(`sn${i}`) || stationId;
+                    const line = params.get(`l${i}`) || '';
+                    const direction = params.get(`d${i}`) || '';
+
+                    if (!stationId) {
+                        showErrorView('Ungültiges URL-Format. Es fehlen Haltestellen-IDs.');
+                        return;
+                    }
+
+                    const card = createMonitorCard(stationName, line, direction);
+                    DOM.monitorsContainer.appendChild(card);
+
+                    activeMonitors.push({ card, stationId, line, direction });
+                    i++;
+                }
+
+                refreshAllLiveMonitors();
+
+                liveRefreshInterval = setInterval(refreshAllLiveMonitors, LIVE_REFRESH_MS);
+                countdownTimerInterval = setInterval(updateAllCountdowns, COUNTDOWN_REFRESH_MS);
+            }
+
+            function refreshAllLiveMonitors() {
                 activeMonitors.forEach(mon => {
                     fetchLiveDepartures(mon.card, mon.stationId, mon.line, mon.direction);
                 });
-            };
+            }
 
-            fetchAllLive();
+            function createMonitorCard(stationName, line, direction) {
+                const card = document.createElement('article');
+                card.className = 'departure-card';
 
-            liveRefreshInterval = setInterval(fetchAllLive, 30000);
+                card.innerHTML = `
+                    <header class="card-header">
+                        <div class="station-info">
+                            <h3 class="station-name">${escapeHtml(stationName)}</h3>
+                        </div>
+                        <div class="line-info">
+                            <img src="icons/transport.svg" alt="[Verkehrsmittel]" class="transport-icon" onerror="this.style.display='none'">
+                            <span class="line-badge">${escapeHtml(line || 'Alle')}</span>
+                            <span class="direction-name">nach ${escapeHtml(direction || 'Alle Richtungen')}</span>
+                        </div>
+                    </header>
 
-            countdownTimerInterval = setInterval(() => {
-                updateAllCountdowns();
-            }, 60000);
-        }
+                    <hr class="card-divider">
 
-        function createMonitorCard(stationName, line, direction) {
-            const card = document.createElement('article');
-            card.className = 'departure-card';
-
-            card.innerHTML = `
-                <header class="card-header">
-                    <div class="station-info">
-                        <h3 class="station-name">${escapeHtml(stationName)}</h3>
+                    <div class="card-body">
+                        <ul class="departures-list">
+                            <li class="departure-slot"><span class="departure-time">Lade...</span></li>
+                        </ul>
                     </div>
-                    <div class="line-info">
-                        <img src="icons/transport.svg" alt="[Verkehrsmittel]" class="transport-icon" onerror="this.style.display='none'">
-                        <span class="line-badge">${escapeHtml(line || 'Alle')}</span>
-                        <span class="direction-name">nach ${escapeHtml(direction || 'Alle Richtungen')}</span>
-                    </div>
-                </header>
+                `;
 
-                <hr class="card-divider">
+                return card;
+            }
 
-                <div class="card-body">
-                    <ul class="departures-list">
-                        <li class="departure-slot"><span class="departure-time">Lade...</span></li>
-                    </ul>
-                </div>
-            `;
+            async function fetchLiveDepartures(card, stationId, targetLine, targetDirection) {
+                const departuresList = card.querySelector('.departures-list');
 
-            return card;
-        }
-
-        function fetchLiveDepartures(card, stationId, targetLine, targetDirection) {
-            const departuresList = card.querySelector('.departures-list');
-
-            fetch(`https://v6.vbb.transport.rest/stops/${encodeURIComponent(stationId)}/departures?duration=90&results=100`)
-                .then(response => {
-                    if (!response.ok) throw new Error('API-Server ist nicht erreichbar');
-                    return response.json();
-                })
-                .then(data => {
-                    const rawDepartures = data.departures || data;
+                try {
+                    const rawDepartures = await fetchVbbDepartures(stationId, 90, 100);
 
                     const filtered = rawDepartures.filter(dep => {
                         const matchLine = !targetLine || (dep.line && dep.line.name === targetLine);
@@ -822,42 +802,42 @@
                             </li>
                         `;
                     }).join('');
-                })
-                .catch(err => {
+                } catch (err) {
                     console.error('Fehler beim Abrufen der Live-Daten:', err);
                     departuresList.innerHTML = '<li class="departure-slot"><span class="departure-time">Fehler</span></li>';
-                });
-        }
-
-        function updateAllCountdowns() {
-            const slots = document.querySelectorAll('.departure-slot[data-timestamp]');
-            slots.forEach(slot => {
-                const timeIso = slot.dataset.timestamp;
-                const minutesSpan = slot.querySelector('.departure-time');
-                if (timeIso && minutesSpan) {
-                    const minutes = calculateMinutesRemaining(timeIso);
-                    if (minutes < 0) {
-                        slot.remove();
-                    } else if (minutes === 0) {
-                        minutesSpan.textContent = 'jetzt';
-                    } else {
-                        minutesSpan.textContent = `${minutes} min`;
-                    }
                 }
-            });
-        }
+            }
 
-        function calculateMinutesRemaining(departureIsoString) {
-            if (!departureIsoString) return -1;
-            const now = new Date();
-            const departureTime = new Date(departureIsoString);
-            const diffMs = departureTime - now;
-            return Math.floor(diffMs / (1000 * 60));
-        }
+            function updateAllCountdowns() {
+                const slots = document.querySelectorAll('.departure-slot[data-timestamp]');
+                slots.forEach(slot => {
+                    const timeIso = slot.dataset.timestamp;
+                    const minutesSpan = slot.querySelector('.departure-time');
+                    if (timeIso && minutesSpan) {
+                        const minutes = calculateMinutesRemaining(timeIso);
+                        if (minutes < 0) {
+                            slot.remove();
+                        } else if (minutes === 0) {
+                            minutesSpan.textContent = 'jetzt';
+                        } else {
+                            minutesSpan.textContent = `${minutes} min`;
+                        }
+                    }
+                });
+            }
 
-        function escapeHtml(str) {
-            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        }
+            function calculateMinutesRemaining(departureIsoString) {
+                if (!departureIsoString) return -1;
+                const now = new Date();
+                const departureTime = new Date(departureIsoString);
+                const diffMs = departureTime - now;
+                return Math.floor(diffMs / (1000 * 60));
+            }
+
+            function escapeHtml(str) {
+                return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            }
+        })();
     </script>
 </body>
 </html>
