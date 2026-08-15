@@ -83,17 +83,39 @@
             box-sizing: border-box;
         }
 
-        .form-group-checkbox {
+        .direction-row {
             display: flex;
+            gap: 6px;
+            margin-bottom: 6px;
             align-items: center;
-            gap: 8px;
-            margin-top: 6px;
-            font-size: 0.9em;
-            cursor: pointer;
         }
 
-        .form-group-checkbox input {
+        .direction-row select {
+            flex: 1;
+        }
+
+        .btn-remove-dir {
+            background-color: #ff4d4d;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 8px 12px;
             cursor: pointer;
+            font-weight: bold;
+        }
+
+        .btn-add-dir {
+            background: none;
+            border: 1px dashed #666;
+            border-radius: 4px;
+            padding: 6px 10px;
+            font-size: 0.85em;
+            cursor: pointer;
+            margin-top: 4px;
+        }
+
+        .btn-add-dir:hover {
+            background-color: #eee;
         }
 
         .autocomplete-list {
@@ -312,16 +334,20 @@
             </div>
 
             <div class="form-group">
-                <label>Fahrtrichtung:</label>
-                <select class="select-direction" disabled>
-                    <option value="">-- Erst Linie wählen --</option>
-                </select>
-                <label class="form-group-checkbox">
-                    <input type="checkbox" class="checkbox-match-next-stop" checked>
-                    <span>Alle Fahrten in diese Fahrtrichtung einschließen (gleicher nächster Halt)</span>
-                </label>
+                <label>Fahrtrichtung(en):</label>
+                <div class="directions-container"></div>
+                <button type="button" class="btn-add-dir hidden">+ Weitere Fahrtrichtung hinzufügen</button>
             </div>
         </fieldset>
+    </template>
+
+    <template id="tmpl-direction-row">
+        <div class="direction-row">
+            <select class="select-direction" disabled>
+                <option value="">-- Erst Linie wählen --</option>
+            </select>
+            <button type="button" class="btn-remove-dir hidden" title="Richtung entfernen">×</button>
+        </div>
     </template>
 
     <script>
@@ -349,7 +375,8 @@
                 btnErrorBack: document.getElementById('btn-error-back'),
                 linkEditConfig: document.getElementById('link-edit-config'),
                 tmplSearchBlock: document.getElementById('tmpl-search-block'),
-                tmplSwapDivider: document.getElementById('tmpl-swap-divider')
+                tmplSwapDivider: document.getElementById('tmpl-swap-divider'),
+                tmplDirectionRow: document.getElementById('tmpl-direction-row')
             };
 
             document.addEventListener('DOMContentLoaded', () => {
@@ -428,7 +455,7 @@
             }
 
             async function fetchVbbDepartures(stationId, duration = 90, results = 100) {
-                const url = `${API_BASE_URL}/stops/${encodeURIComponent(stationId)}/departures?duration=${duration}&results=${results}&stopovers=true`;
+                const url = `${API_BASE_URL}/stops/${encodeURIComponent(stationId)}/departures?duration=${duration}&results=${results}`;
                 const response = await fetch(url);
                 if (!response.ok) throw new Error('API-Server ist nicht erreichbar');
                 const data = await response.json();
@@ -440,59 +467,6 @@
                 const response = await fetch(url);
                 if (!response.ok) throw new Error('Netzwerkfehler bei Standortsuche');
                 return await response.json();
-            }
-
-            function normalizeId(id) {
-                if (!id) return '';
-                return String(id).replace(/^0+/, '').trim();
-            }
-
-            function normalizeName(name) {
-                if (!name) return '';
-                return String(name).toLowerCase().replace(/\s+/g, ' ').replace(/[(),.-]/g, '').trim();
-            }
-
-            function getNextStopIdentifier(dep, currentStationId, currentStationName) {
-                if (!dep || !dep.stopovers || !Array.isArray(dep.stopovers) || dep.stopovers.length === 0) {
-                    return null;
-                }
-
-                const normCurrentId = normalizeId(currentStationId);
-                const normCurrentName = normalizeName(currentStationName || dep.stop?.name);
-
-                let currentIdx = dep.stopovers.findIndex(s => {
-                    if (!s || !s.stop) return false;
-                    const stopId = normalizeId(s.stop.id);
-                    const stationId = normalizeId(s.stop.station?.id);
-                    const stopName = normalizeName(s.stop.name);
-                    return (
-                        (normCurrentId && (stopId === normCurrentId || stationId === normCurrentId)) ||
-                        (normCurrentName && stopName === normCurrentName)
-                    );
-                });
-
-                if (currentIdx !== -1) {
-                    if (currentIdx + 1 < dep.stopovers.length) {
-                        const next = dep.stopovers[currentIdx + 1].stop;
-                        return normalizeName(next?.name) || normalizeId(next?.id);
-                    }
-                    return null;
-                }
-
-                const first = dep.stopovers[0].stop;
-                const firstNormName = normalizeName(first?.name);
-                const firstNormId = normalizeId(first?.id);
-
-                if (firstNormName !== normCurrentName && firstNormId !== normCurrentId) {
-                    return firstNormName || firstNormId;
-                }
-
-                if (dep.stopovers.length > 1) {
-                    const second = dep.stopovers[1].stop;
-                    return normalizeName(second?.name) || normalizeId(second?.id);
-                }
-
-                return null;
             }
 
             function addSearchBlock() {
@@ -512,6 +486,7 @@
 
                 const inputStation = block.querySelector('.input-station');
                 const selectLine = block.querySelector('.select-line');
+                const btnAddDir = block.querySelector('.btn-add-dir');
 
                 inputStation.addEventListener('input', function() {
                     handleStationInput(this);
@@ -521,12 +496,50 @@
                     handleLineChange(this);
                 });
 
+                btnAddDir.addEventListener('click', function() {
+                    addDirectionRow(block);
+                });
+
                 block._departuresCache = [];
+
+                // Mindestens eine Richtungszeile initial einfügen
+                addDirectionRow(block);
 
                 DOM.blocksContainer.appendChild(blockClone);
                 reindexFormElements();
 
                 return block;
+            }
+
+            function addDirectionRow(block, preselectedValue = '') {
+                const container = block.querySelector('.directions-container');
+                const rowClone = DOM.tmplDirectionRow.content.cloneNode(true);
+                const row = rowClone.querySelector('.direction-row');
+                const select = row.querySelector('.select-direction');
+                const btnRemove = row.querySelector('.btn-remove-dir');
+
+                btnRemove.addEventListener('click', () => {
+                    row.remove();
+                    updateDirectionRemoveButtons(block);
+                });
+
+                container.appendChild(rowClone);
+                populateDirectionSelect(block, select, preselectedValue);
+                updateDirectionRemoveButtons(block);
+
+                return select;
+            }
+
+            function updateDirectionRemoveButtons(block) {
+                const rows = block.querySelectorAll('.direction-row');
+                rows.forEach(r => {
+                    const btn = r.querySelector('.btn-remove-dir');
+                    if (rows.length > 1) {
+                        btn.classList.remove('hidden');
+                    } else {
+                        btn.classList.add('hidden');
+                    }
+                });
             }
 
             function removeLastSearchBlock() {
@@ -578,13 +591,6 @@
                         selectLine.id = `line-select-${num}`;
                         labelLine.setAttribute('for', `line-select-${num}`);
                     }
-
-                    const labelDirection = block.querySelector('.form-group:nth-child(4) label');
-                    const selectDirection = block.querySelector('.select-direction');
-                    if (labelDirection && selectDirection) {
-                        selectDirection.id = `direction-select-${num}`;
-                        labelDirection.setAttribute('for', `direction-select-${num}`);
-                    }
                 });
 
                 if (blocks.length > 1) {
@@ -599,7 +605,8 @@
                 const hiddenId = block.querySelector('.input-station-id');
                 const list = block.querySelector('.autocomplete-list');
                 const selectLine = block.querySelector('.select-line');
-                const selectDirection = block.querySelector('.select-direction');
+                const dirContainer = block.querySelector('.directions-container');
+                const btnAddDir = block.querySelector('.btn-add-dir');
                 const query = input.value.trim();
 
                 hiddenId.value = '';
@@ -607,8 +614,10 @@
 
                 selectLine.disabled = true;
                 selectLine.innerHTML = '<option value="">-- Erst Station wählen --</option>';
-                selectDirection.disabled = true;
-                selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
+                
+                dirContainer.innerHTML = '';
+                addDirectionRow(block);
+                btnAddDir.classList.add('hidden');
 
                 if (debounceTimers.has(input.id)) {
                     clearTimeout(debounceTimers.get(input.id));
@@ -659,16 +668,11 @@
                 debounceTimers.set(input.id, timer);
             }
 
-            async function fetchLinesForStation(block, stationId, preselectedLine = '', preselectedDirection = '', matchNextStop = true) {
+            async function fetchLinesForStation(block, stationId, preselectedLine = '', preselectedDirections = []) {
                 const selectLine = block.querySelector('.select-line');
-                const selectDirection = block.querySelector('.select-direction');
-                const checkboxMatch = block.querySelector('.checkbox-match-next-stop');
 
                 selectLine.disabled = true;
                 selectLine.innerHTML = '<option value="">Lade Linien...</option>';
-                selectDirection.disabled = true;
-                selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
-                if (checkboxMatch) checkboxMatch.checked = matchNextStop;
 
                 try {
                     const departures = await fetchVbbDepartures(stationId, 90, 100);
@@ -701,7 +705,7 @@
                     selectLine.disabled = false;
 
                     if (preselectedLine) {
-                        handleLineChange(selectLine, preselectedDirection);
+                        handleLineChange(selectLine, preselectedDirections);
                     }
                 } catch (err) {
                     console.error('Linien-Lade-Fehler:', err);
@@ -709,15 +713,12 @@
                 }
             }
 
-            function handleLineChange(select, preselectedDirection = '') {
-                const block = select.closest('.search-block');
-                const selectDirection = block.querySelector('.select-direction');
-                const selectedLine = select.value;
-
-                selectDirection.disabled = true;
+            function populateDirectionSelect(block, select, preselectedValue = '') {
+                const selectedLine = block.querySelector('.select-line').value;
 
                 if (!selectedLine) {
-                    selectDirection.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
+                    select.disabled = true;
+                    select.innerHTML = '<option value="">-- Erst Linie wählen --</option>';
                     return;
                 }
 
@@ -730,10 +731,11 @@
                     }
                 });
 
-                selectDirection.innerHTML = '<option value="">-- Fahrtrichtung wählen (oder alle) --</option>';
+                select.innerHTML = '<option value="">-- Fahrtrichtung wählen (oder alle) --</option>';
 
                 if (directionsSet.size === 0) {
-                    selectDirection.innerHTML = '<option value="">Keine Richtungen gefunden</option>';
+                    select.innerHTML = '<option value="">Keine Richtungen gefunden</option>';
+                    select.disabled = true;
                     return;
                 }
 
@@ -741,13 +743,38 @@
                     const opt = document.createElement('option');
                     opt.value = directionName;
                     opt.textContent = directionName;
-                    if (directionName === preselectedDirection) {
+                    if (directionName === preselectedValue) {
                         opt.selected = true;
                     }
-                    selectDirection.appendChild(opt);
+                    select.appendChild(opt);
                 });
 
-                selectDirection.disabled = false;
+                select.disabled = false;
+            }
+
+            function handleLineChange(select, preselectedDirections = []) {
+                const block = select.closest('.search-block');
+                const dirContainer = block.querySelector('.directions-container');
+                const btnAddDir = block.querySelector('.btn-add-dir');
+                const selectedLine = select.value;
+
+                dirContainer.innerHTML = '';
+
+                if (!selectedLine) {
+                    btnAddDir.classList.add('hidden');
+                    addDirectionRow(block);
+                    return;
+                }
+
+                btnAddDir.classList.remove('hidden');
+
+                if (preselectedDirections.length > 0) {
+                    preselectedDirections.forEach(dir => {
+                        addDirectionRow(block, dir);
+                    });
+                } else {
+                    addDirectionRow(block);
+                }
             }
 
             function handleFormSubmit(e) {
@@ -761,8 +788,14 @@
                     const stationId = block.querySelector('.input-station-id').value;
                     const stationName = block.querySelector('.input-station').value;
                     const line = block.querySelector('.select-line').value;
-                    const direction = block.querySelector('.select-direction').value;
-                    const matchNext = block.querySelector('.checkbox-match-next-stop').checked;
+
+                    const dirSelects = block.querySelectorAll('.select-direction');
+                    const directions = [];
+                    dirSelects.forEach(s => {
+                        if (s.value && !directions.includes(s.value)) {
+                            directions.push(s.value);
+                        }
+                    });
 
                     if (!stationId) {
                         isValid = false;
@@ -772,8 +805,9 @@
                     params.set(`s${i}`, stationId);
                     params.set(`sn${i}`, stationName);
                     if (line) params.set(`l${i}`, line);
-                    if (direction) params.set(`d${i}`, direction);
-                    params.set(`m${i}`, matchNext ? '1' : '0');
+                    if (directions.length > 0) {
+                        params.set(`d${i}`, directions.join('|'));
+                    }
                 });
 
                 if (!isValid) {
@@ -793,8 +827,8 @@
                     const stationId = params.get(`s${i}`);
                     const stationName = params.get(`sn${i}`) || stationId;
                     const line = params.get(`l${i}`) || '';
-                    const direction = params.get(`d${i}`) || '';
-                    const matchNext = params.has(`m${i}`) ? params.get(`m${i}`) === '1' : true;
+                    const rawDir = params.get(`d${i}`) || '';
+                    const directions = rawDir ? rawDir.split('|') : [];
 
                     const block = addSearchBlock();
                     
@@ -804,7 +838,7 @@
                     inputStation.value = stationName;
                     hiddenStationId.value = stationId;
 
-                    fetchLinesForStation(block, stationId, line, direction, matchNext);
+                    fetchLinesForStation(block, stationId, line, directions);
 
                     i++;
                 }
@@ -822,18 +856,18 @@
                     const stationId = params.get(`s${i}`);
                     const stationName = params.get(`sn${i}`) || stationId;
                     const line = params.get(`l${i}`) || '';
-                    const direction = params.get(`d${i}`) || '';
-                    const matchNextStop = params.has(`m${i}`) ? params.get(`m${i}`) !== '0' : true;
+                    const rawDir = params.get(`d${i}`) || '';
+                    const directions = rawDir ? rawDir.split('|') : [];
 
                     if (!stationId) {
                         showErrorView('Ungültiges URL-Format. Es fehlen Haltestellen-IDs.');
                         return;
                     }
 
-                    const card = createMonitorCard(stationName, line, direction);
+                    const card = createMonitorCard(stationName, line, directions);
                     DOM.monitorsContainer.appendChild(card);
 
-                    activeMonitors.push({ card, stationId, stationName, line, direction, matchNextStop, storedNextStop: null });
+                    activeMonitors.push({ card, stationId, line, directions });
                     i++;
                 }
 
@@ -845,13 +879,15 @@
 
             function refreshAllLiveMonitors() {
                 activeMonitors.forEach(mon => {
-                    fetchLiveDepartures(mon);
+                    fetchLiveDepartures(mon.card, mon.stationId, mon.line, mon.directions);
                 });
             }
 
-            function createMonitorCard(stationName, line, direction) {
+            function createMonitorCard(stationName, line, directions) {
                 const card = document.createElement('article');
                 card.className = 'departure-card';
+
+                const dirLabel = directions.length > 0 ? directions.join(' / ') : 'Alle Richtungen';
 
                 card.innerHTML = `
                     <header class="card-header">
@@ -861,7 +897,7 @@
                         <div class="line-info">
                             <img src="icons/transport.svg" alt="[Verkehrsmittel]" class="transport-icon" onerror="this.style.display='none'">
                             <span class="line-badge">${escapeHtml(line || 'Alle')}</span>
-                            <span class="direction-name">nach ${escapeHtml(direction || 'Alle Richtungen')}</span>
+                            <span class="direction-name">nach ${escapeHtml(dirLabel)}</span>
                         </div>
                     </header>
 
@@ -877,50 +913,15 @@
                 return card;
             }
 
-            async function fetchLiveDepartures(mon) {
-                const card = mon.card;
-                const stationId = mon.stationId;
-                const stationName = mon.stationName;
-                const targetLine = mon.line;
-                const targetDirection = mon.direction;
-                const matchNextStop = mon.matchNextStop;
-
+            async function fetchLiveDepartures(card, stationId, targetLine, targetDirections) {
                 const departuresList = card.querySelector('.departures-list');
 
                 try {
                     const rawDepartures = await fetchVbbDepartures(stationId, 90, 100);
 
-                    // Referenz-Folgehalt ermitteln und für spätere Refreshes zwischenspeichern
-                    if (matchNextStop && targetDirection) {
-                        const targetDep = rawDepartures.find(dep => {
-                            const matchLine = !targetLine || (dep.line && dep.line.name === targetLine);
-                            return matchLine && dep.direction && normalizeName(dep.direction) === normalizeName(targetDirection);
-                        });
-                        if (targetDep) {
-                            const nextStop = getNextStopIdentifier(targetDep, stationId, stationName);
-                            if (nextStop) mon.storedNextStop = nextStop;
-                        }
-                    }
-
-                    const referenceNextStop = mon.storedNextStop;
-
                     const filtered = rawDepartures.filter(dep => {
                         const matchLine = !targetLine || (dep.line && dep.line.name === targetLine);
-                        let matchDir = false;
-
-                        if (!targetDirection) {
-                            matchDir = true;
-                        } else if (matchNextStop && referenceNextStop) {
-                            const depNextStop = getNextStopIdentifier(dep, stationId, stationName);
-                            if (depNextStop) {
-                                matchDir = (depNextStop === referenceNextStop);
-                            } else {
-                                matchDir = normalizeName(dep.direction) === normalizeName(targetDirection);
-                            }
-                        } else {
-                            matchDir = normalizeName(dep.direction) === normalizeName(targetDirection);
-                        }
-
+                        const matchDir = targetDirections.length === 0 || targetDirections.includes(dep.direction);
                         const timeIso = dep.when || dep.plannedWhen;
                         const minutes = calculateMinutesRemaining(timeIso);
                         return matchLine && matchDir && minutes >= 0;
