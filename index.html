@@ -502,7 +502,6 @@
 
                 block._departuresCache = [];
 
-                // Mindestens eine Richtungszeile initial einfügen
                 addDirectionRow(block);
 
                 DOM.blocksContainer.appendChild(blockClone);
@@ -671,8 +670,10 @@
             async function fetchLinesForStation(block, stationId, preselectedLine = '', preselectedDirections = []) {
                 const selectLine = block.querySelector('.select-line');
 
-                selectLine.disabled = true;
-                selectLine.innerHTML = '<option value="">Lade Linien...</option>';
+                if (!preselectedLine) {
+                    selectLine.disabled = true;
+                    selectLine.innerHTML = '<option value="">Lade Linien...</option>';
+                }
 
                 try {
                     const departures = await fetchVbbDepartures(stationId, 90, 100);
@@ -685,9 +686,14 @@
                         }
                     });
 
+                    // Falls die vorausgewählte Linie nachts nicht in der API ist, dennoch behalten
+                    if (preselectedLine && !linesMap.has(preselectedLine)) {
+                        linesMap.set(preselectedLine, { name: preselectedLine });
+                    }
+
                     selectLine.innerHTML = '<option value="">-- Linie wählen (oder alle) --</option>';
 
-                    if (linesMap.size === 0) {
+                    if (linesMap.size === 0 && !preselectedLine) {
                         selectLine.innerHTML = '<option value="">Keine aktuellen Linien gefunden</option>';
                         return;
                     }
@@ -709,7 +715,9 @@
                     }
                 } catch (err) {
                     console.error('Linien-Lade-Fehler:', err);
-                    selectLine.innerHTML = '<option value="">Fehler beim Laden der Linien</option>';
+                    if (!preselectedLine) {
+                        selectLine.innerHTML = '<option value="">Fehler beim Laden der Linien</option>';
+                    }
                 }
             }
 
@@ -730,6 +738,11 @@
                         directionsSet.add(dep.direction);
                     }
                 });
+
+                // Falls der gespeicherte URL-Wert nachts nicht in der API ist, dennoch als Option behalten
+                if (preselectedValue) {
+                    directionsSet.add(preselectedValue);
+                }
 
                 select.innerHTML = '<option value="">-- Fahrtrichtung wählen (oder alle) --</option>';
 
@@ -834,10 +847,44 @@
                     
                     const inputStation = block.querySelector('.input-station');
                     const hiddenStationId = block.querySelector('.input-station-id');
+                    const selectLine = block.querySelector('.select-line');
+                    const btnAddDir = block.querySelector('.btn-add-dir');
                     
                     inputStation.value = stationName;
                     hiddenStationId.value = stationId;
 
+                    // URL-Werte sofort statisch vorbefüllen (Schutz gegen nächtliche Leer-API)
+                    if (line) {
+                        selectLine.innerHTML = `<option value="${escapeHtml(line)}" selected>${escapeHtml(line)}</option>`;
+                        selectLine.disabled = false;
+                        btnAddDir.classList.remove('hidden');
+
+                        const dirContainer = block.querySelector('.directions-container');
+                        dirContainer.innerHTML = '';
+                        if (directions.length > 0) {
+                            directions.forEach(dir => {
+                                const rowClone = DOM.tmplDirectionRow.content.cloneNode(true);
+                                const row = rowClone.querySelector('.direction-row');
+                                const select = row.querySelector('.select-direction');
+                                const btnRemove = row.querySelector('.btn-remove-dir');
+
+                                btnRemove.addEventListener('click', () => {
+                                    row.remove();
+                                    updateDirectionRemoveButtons(block);
+                                });
+
+                                select.innerHTML = `<option value="${escapeHtml(dir)}" selected>${escapeHtml(dir)}</option>`;
+                                select.disabled = false;
+
+                                dirContainer.appendChild(rowClone);
+                            });
+                            updateDirectionRemoveButtons(block);
+                        } else {
+                            addDirectionRow(block);
+                        }
+                    }
+
+                    // Im Hintergrund versuchen, zusätzliche Live-Optionen zu laden
                     fetchLinesForStation(block, stationId, line, directions);
 
                     i++;
